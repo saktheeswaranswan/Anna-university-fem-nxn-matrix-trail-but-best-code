@@ -1,0 +1,730 @@
+// =====================================================
+// FEM GST VISUALIZER (SIZE -> MATRIX -> DOF -> SETTING -> ASSEMBLY)
+// =====================================================
+
+final int E = 4;
+final int GLOBAL = 12;
+
+final int STAGE_SIZE   = 0;
+final int STAGE_MATRIX = 1;
+final int STAGE_DOF    = 2;
+final int STAGE_READY  = 3;
+
+// layout cells
+float localCell = 40;
+float globalCell = 28;
+
+// =====================================================
+// GLOBAL MATRIX
+// =====================================================
+class GlobalMatrix {
+  float[][] K = new float[GLOBAL][GLOBAL];
+  int[][] hit = new int[GLOBAL][GLOBAL];
+
+  void reset() {
+    for (int r = 0; r < GLOBAL; r++) {
+      for (int c = 0; c < GLOBAL; c++) {
+        K[r][c] = 0;
+        hit[r][c] = 0;
+      }
+    }
+  }
+
+  void add(int I, int J, float val) {
+    K[I][J] += val;
+    hit[I][J]++;
+  }
+
+  void draw(float x, float y, float cell) {
+    fill(0);
+    text("GLOBAL MATRIX (ASSEMBLED)", x + 180, y - 40);
+
+    for (int r = 0; r < GLOBAL; r++) {
+      for (int c = 0; c < GLOBAL; c++) {
+        fill(hit[r][c] == 0 ? 255 : color(200, 180, 120));
+        stroke(0);
+        rect(x + c * cell, y + r * cell, cell, cell);
+
+        fill(0);
+        text(nf(K[r][c], 0, 2),
+             x + c * cell + cell / 2,
+             y + r * cell + cell / 2);
+      }
+    }
+  }
+}
+
+// =====================================================
+// ELEMENT
+// =====================================================
+class Element {
+  int LOCAL = 0;
+
+  float[][] ke;
+  boolean[][] keSet;
+
+  int[] C;
+  boolean[] dofSet;
+
+  int ei = 0, ej = 0;
+  boolean finished = false;
+
+  void init(int n) {
+    LOCAL = n;
+
+    ke = new float[n][n];
+    keSet = new boolean[n][n];
+
+    C = new int[n];
+    dofSet = new boolean[n];
+
+    for (int i = 0; i < n; i++) {
+      C[i] = i;
+      dofSet[i] = false;
+    }
+
+    ei = 0;
+    ej = 0;
+    finished = false;
+  }
+
+  boolean matrixComplete() {
+    if (LOCAL == 0) return false;
+    for (int r = 0; r < LOCAL; r++) {
+      for (int c = 0; c < LOCAL; c++) {
+        if (!keSet[r][c]) return false;
+      }
+    }
+    return true;
+  }
+
+  boolean dofComplete() {
+    if (LOCAL == 0) return false;
+    for (int i = 0; i < LOCAL; i++) {
+      if (!dofSet[i]) return false;
+    }
+    return true;
+  }
+
+  boolean readyForAssembly() {
+    return LOCAL > 0 && matrixComplete() && dofComplete();
+  }
+
+  void step(GlobalMatrix G) {
+    if (!readyForAssembly() || finished) return;
+
+    int I = C[ei];
+    int J = C[ej];
+    G.add(I, J, ke[ei][ej]);
+
+    ej++;
+    if (ej >= LOCAL) {
+      ej = 0;
+      ei++;
+    }
+
+    if (ei >= LOCAL) finished = true;
+  }
+}
+
+// =====================================================
+// MAIN
+// =====================================================
+Element[] elements = new Element[E];
+GlobalMatrix G;
+
+int activeElement = 0;
+
+// input modes
+final int NONE = 0, SIZE = 1, MATRIX = 2, DOF = 3;
+int mode = NONE;
+
+String input = "";
+
+int rSel = 0, cSel = 0, dofSel = 0;
+
+// workflow flags
+boolean sizeFinished = false;
+boolean matrixFinished = false;
+boolean dofFinished = false;
+boolean settingFinished = false;
+boolean assembly = false;
+
+String message = "";
+
+// keypad
+String[] keys = {
+  "7","8","9",
+  "4","5","6",
+  "1","2","3",
+  "0",".","-",
+  "OK"
+};
+
+// =====================================================
+void setup() {
+  fullScreen();
+  textAlign(CENTER, CENTER);
+  textSize(16);
+
+  G = new GlobalMatrix();
+  for (int i = 0; i < E; i++) elements[i] = new Element();
+
+  message = "Enter size for Element 1.";
+}
+
+// =====================================================
+void draw() {
+  background(245);
+
+  stroke(0);
+  fill(0);
+
+  updateWorkflowFlags();
+
+  float leftX = 40;
+  float rightX = width * 0.58;
+  float topY = 120;
+
+  drawSelector();
+
+  Element el = elements[activeElement];
+  int stage = stageOf(el);
+
+  drawStageLabel(stage, leftX, topY);
+
+  drawLocal(el, leftX, topY);
+
+  float dofY = topY + max(1, el.LOCAL) * localCell + 40;
+  drawDOF(el, leftX, dofY);
+
+  if (settingFinished || assembly) {
+    G.draw(rightX, topY, globalCell);
+  }
+
+  drawButtons();
+  drawInputPanel();
+
+  if (mode != NONE && !assembly) {
+    drawKeypad(dofY);
+  }
+
+  drawInfo();
+}
+
+// =====================================================
+// FLAGS
+// =====================================================
+void updateWorkflowFlags() {
+  sizeFinished = allSizesSet();
+  matrixFinished = allMatrixDone();
+  dofFinished = allDofDone();
+}
+
+boolean allSizesSet() {
+  for (int i = 0; i < E; i++) {
+    if (elements[i].LOCAL == 0) return false;
+  }
+  return true;
+}
+
+boolean allMatrixDone() {
+  for (int i = 0; i < E; i++) {
+    if (!elements[i].matrixComplete()) return false;
+  }
+  return true;
+}
+
+boolean allDofDone() {
+  for (int i = 0; i < E; i++) {
+    if (!elements[i].dofComplete()) return false;
+  }
+  return true;
+}
+
+// =====================================================
+// STAGE HELPERS
+// =====================================================
+int stageOf(Element el) {
+  if (el.LOCAL == 0) return STAGE_SIZE;
+  if (!el.matrixComplete()) return STAGE_MATRIX;
+  if (!el.dofComplete()) return STAGE_DOF;
+  return STAGE_READY;
+}
+
+String stageName(int stage) {
+  if (stage == STAGE_SIZE)   return "SIZE ENTRY";
+  if (stage == STAGE_MATRIX) return "MATRIX ENTRY";
+  if (stage == STAGE_DOF)    return "DOF ENTRY";
+  return "READY FOR SETTING FINISH";
+}
+
+void drawStageLabel(int stage, float x, float y) {
+  fill(0);
+  text(stageName(stage), x + 140, y - 40);
+}
+
+// =====================================================
+// DRAW LOCAL MATRIX
+// =====================================================
+void drawLocal(Element el, float x, float y) {
+  if (el.LOCAL == 0) {
+    fill(0);
+    text("Click SIZE and enter n", x + 140, y);
+    return;
+  }
+
+  for (int r = 0; r < el.LOCAL; r++) {
+    for (int c = 0; c < el.LOCAL; c++) {
+      boolean sel = (mode == MATRIX && r == rSel && c == cSel);
+
+      if (sel) fill(color(255, 220, 150));
+      else if (el.keSet[r][c]) fill(235);
+      else fill(255);
+
+      stroke(0);
+      rect(x + c * localCell, y + r * localCell, localCell, localCell);
+
+      fill(0);
+      String txt = el.keSet[r][c] ? nf(el.ke[r][c], 0, 2) : "";
+      if (sel) txt = input;
+      text(txt,
+           x + c * localCell + localCell / 2,
+           y + r * localCell + localCell / 2);
+    }
+  }
+}
+
+// =====================================================
+// DRAW DOF ROW
+// =====================================================
+void drawDOF(Element el, float x, float y) {
+  if (el.LOCAL == 0) return;
+
+  fill(0);
+  text("DOF MAPPING", x + 140, y - 20);
+
+  for (int i = 0; i < el.LOCAL; i++) {
+    boolean sel = (mode == DOF && i == dofSel);
+
+    if (sel) fill(color(255, 220, 150));
+    else if (el.dofSet[i]) fill(235);
+    else fill(255);
+
+    stroke(0);
+    rect(x + i * localCell, y, localCell, localCell);
+
+    fill(0);
+    String txt = el.dofSet[i] ? ("g" + (el.C[i] + 1)) : "";
+    if (sel) txt = input;
+    text(txt,
+         x + i * localCell + localCell / 2,
+         y + localCell / 2);
+  }
+}
+
+// =====================================================
+// BUTTONS
+// =====================================================
+void drawButtons() {
+  float y = height - 160;
+
+  drawButton(40,  y, 120, 40, "SIZE",            color(255, 220, 120), true);
+  drawButton(190, y, 170, 40, "SETTING FINISH",   color(255, 180, 180), allReady());
+  drawButton(390, y, 140, 40, "ASSEMBLE",         color(180, 255, 180), settingFinished);
+}
+
+void drawButton(float x, float y, float w, float h, String label, int col, boolean enabled) {
+  stroke(0);
+  strokeWeight(1.5);
+
+  if (!enabled) fill(220);
+  else fill(col);
+
+  rect(x, y, w, h, 8);
+
+  fill(0);
+  text(label, x + w / 2, y + h / 2);
+}
+
+boolean allReady() {
+  return sizeFinished && matrixFinished && dofFinished;
+}
+
+// =====================================================
+// INPUT PANEL
+// =====================================================
+void drawInputPanel() {
+  if (mode == NONE || assembly) return;
+
+  float x = width / 2 - 170;
+  float y = height - 105;
+
+  stroke(0);
+  fill(255);
+  rect(x, y, 340, 45, 8);
+
+  fill(0);
+
+  String label = "";
+  if (mode == SIZE) label = "SIZE";
+  else if (mode == MATRIX) label = "MATRIX";
+  else if (mode == DOF) label = "DOF";
+
+  String txt = input.length() > 0 ? input : ("Enter " + label);
+  text(txt, x + 170, y + 22);
+}
+
+// =====================================================
+// SELECTOR
+// =====================================================
+void drawSelector() {
+  for (int i = 0; i < E; i++) {
+    Element el = elements[i];
+
+    int col;
+    if (i == activeElement) col = color(180, 220, 255);
+    else if (el.readyForAssembly()) col = color(180, 240, 180);
+    else if (el.LOCAL > 0) col = color(220);
+    else col = color(200);
+
+    drawButton(40 + i * 120, 20, 100, 40, "E" + (i + 1), col, true);
+  }
+}
+
+// =====================================================
+// KEYPAD
+// =====================================================
+void drawKeypad(float baseY) {
+  if (mode == NONE || assembly) return;
+
+  float keypadW = 3 * 60;
+  float keypadH = 5 * 60;
+
+  float x = width / 2 - keypadW / 2;
+  float topLimit = baseY + 100;
+  float bottomLimit = height - 220;
+
+  float available = bottomLimit - topLimit;
+
+  float y = (available > keypadH)
+          ? topLimit + (available - keypadH) / 2
+          : topLimit;
+
+  int idx = 0;
+  for (int r = 0; r < 5; r++) {
+    for (int c = 0; c < 3; c++) {
+      if (idx >= keys.length) continue;
+
+      stroke(0);
+      fill(220);
+      rect(x + c * 60, y + r * 60, 50, 50);
+
+      fill(0);
+      text(keys[idx], x + c * 60 + 25, y + r * 60 + 25);
+
+      idx++;
+    }
+  }
+}
+
+// =====================================================
+// INFO MESSAGE
+// =====================================================
+void drawInfo() {
+  fill(0);
+
+  if (assembly) {
+    String msg = "";
+    boolean any = false;
+
+    for (int i = 0; i < E; i++) {
+      Element e = elements[i];
+      if (e.readyForAssembly() && !e.finished) {
+        msg += "E" + (i + 1) + "→(" + (e.C[e.ei] + 1) + "," + (e.C[e.ej] + 1) + ")  ";
+        any = true;
+      }
+    }
+
+    if (!any) msg = "Assembly complete";
+    text(msg, width / 2, height - 40);
+  } else {
+    text(message, width / 2, height - 40);
+  }
+}
+
+// =====================================================
+// MOUSE
+// =====================================================
+boolean over(float x, float y, float w, float h) {
+  return mouseX > x && mouseX < x + w && mouseY > y && mouseY < y + h;
+}
+
+void mousePressed() {
+
+  // assembly click = one sparse assembly step
+  if (assembly) {
+    for (Element e : elements) e.step(G);
+    return;
+  }
+
+  // selector
+  for (int i = 0; i < E; i++) {
+    if (over(40 + i * 120, 20, 100, 40)) {
+      activeElement = i;
+      mode = stageMode(stageOf(elements[activeElement]));
+      input = "";
+      message = "Element " + (activeElement + 1) + " selected.";
+      return;
+    }
+  }
+
+  // SIZE button
+  if (over(40, height - 160, 120, 40)) {
+    mode = SIZE;
+    input = "";
+    message = "Enter size for Element " + (activeElement + 1) + ".";
+    return;
+  }
+
+  // SETTING FINISH
+  if (over(190, height - 160, 170, 40)) {
+    if (allReady()) {
+      settingFinished = true;
+      assembly = false;
+      mode = NONE;
+      message = "SETTING FINISHED. Click ASSEMBLE.";
+    } else {
+      message = "❌ No setting finish: complete size, matrix, and DOF first.";
+    }
+    return;
+  }
+
+  // ASSEMBLE
+  if (over(390, height - 160, 140, 40)) {
+    if (settingFinished) {
+      assembly = true;
+      message = "ASSEMBLY STARTED. Click to step.";
+    } else {
+      message = "❌ SETTING NOT FINISHED.";
+    }
+    return;
+  }
+
+  Element el = elements[activeElement];
+  int stage = stageOf(el);
+
+  // matrix cell selection
+  if (stage == STAGE_MATRIX) {
+    for (int r = 0; r < el.LOCAL; r++) {
+      for (int c = 0; c < el.LOCAL; c++) {
+        if (over(40 + c * localCell, 120 + r * localCell, localCell, localCell)) {
+          mode = MATRIX;
+          rSel = r;
+          cSel = c;
+          input = el.keSet[r][c] ? nf(el.ke[r][c], 0, 6) : "";
+          message = "Enter value for matrix cell (" + (r + 1) + "," + (c + 1) + ").";
+          return;
+        }
+      }
+    }
+  }
+
+  // dof cell selection
+  if (stage == STAGE_DOF) {
+    float y2 = 120 + el.LOCAL * localCell + 40;
+
+    for (int i = 0; i < el.LOCAL; i++) {
+      if (over(40 + i * localCell, y2, localCell, localCell)) {
+        mode = DOF;
+        dofSel = i;
+        input = el.dofSet[i] ? str(el.C[i] + 1) : "";
+        message = "Enter DOF number for position " + (i + 1) + ".";
+        return;
+      }
+    }
+  }
+
+  // keypad click
+  handleKeypad(el);
+}
+
+// =====================================================
+// KEYPAD INPUT
+// =====================================================
+void handleKeypad(Element el) {
+
+  if (mode == NONE || assembly) return;
+
+  float baseY = (el.LOCAL == 0) ? 220 : (120 + el.LOCAL * localCell + 40);
+  float keypadW = 3 * 60;
+  float keypadH = 5 * 60;
+
+  float x = width / 2 - keypadW / 2;
+  float topLimit = baseY + 100;
+  float bottomLimit = height - 220;
+  float available = bottomLimit - topLimit;
+  float y = (available > keypadH)
+          ? topLimit + (available - keypadH) / 2
+          : topLimit;
+
+  int idx = 0;
+  for (int r = 0; r < 5; r++) {
+    for (int c = 0; c < 3; c++) {
+      if (idx >= keys.length) continue;
+
+      if (over(x + c * 60, y + r * 60, 50, 50)) {
+        String k = keys[idx];
+
+        if (k.equals("OK")) {
+          commitInput(el);
+          return;
+        } else {
+          if (mode == SIZE) {
+            if (k.charAt(0) >= '0' && k.charAt(0) <= '9') input += k;
+          } else if (mode == DOF) {
+            if (k.charAt(0) >= '0' && k.charAt(0) <= '9') input += k;
+          } else if (mode == MATRIX) {
+            if ((k.charAt(0) >= '0' && k.charAt(0) <= '9') || k.equals(".") || k.equals("-")) {
+              input += k;
+            }
+          }
+          return;
+        }
+      }
+
+      idx++;
+    }
+  }
+}
+
+void commitInput(Element el) {
+  if (mode == SIZE) {
+    int n = int(input);
+
+    if (n > 0 && n <= GLOBAL) {
+      el.init(n);
+      settingFinished = false;
+      assembly = false;
+
+      message = "Size set for Element " + (activeElement + 1) + ". Now enter matrix values.";
+      mode = MATRIX;
+
+      int[] next = nextUnfilledMatrix(el, -1);
+      if (next != null) {
+        rSel = next[0];
+        cSel = next[1];
+      } else {
+        message = "Matrix is already complete. Enter DOF mapping.";
+        mode = DOF;
+        int[] nd = nextUnfilledDof(el, -1);
+        if (nd != null) dofSel = nd[0];
+      }
+    } else {
+      message = "❌ Invalid size.";
+    }
+
+    input = "";
+    return;
+  }
+
+  if (mode == MATRIX) {
+    if (el.LOCAL == 0) {
+      message = "Set size first.";
+      input = "";
+      return;
+    }
+
+    el.ke[rSel][cSel] = float(input);
+    el.keSet[rSel][cSel] = true;
+    settingFinished = false;
+    assembly = false;
+
+    int current = rSel * el.LOCAL + cSel;
+    int[] next = nextUnfilledMatrix(el, current);
+
+    if (next != null) {
+      rSel = next[0];
+      cSel = next[1];
+      message = "Matrix value saved. Next matrix cell.";
+    } else {
+      message = "Matrix entry finished. Now enter DOF mapping.";
+      mode = DOF;
+      int[] nd = nextUnfilledDof(el, -1);
+      if (nd != null) dofSel = nd[0];
+    }
+
+    input = "";
+    return;
+  }
+
+  if (mode == DOF) {
+    if (el.LOCAL == 0) {
+      message = "Set size first.";
+      input = "";
+      return;
+    }
+
+    int v = int(input) - 1;
+    if (v >= 0 && v < GLOBAL) {
+      el.C[dofSel] = v;
+      el.dofSet[dofSel] = true;
+      settingFinished = false;
+      assembly = false;
+
+      int[] next = nextUnfilledDof(el, dofSel);
+
+      if (next != null) {
+        dofSel = next[0];
+        message = "DOF value saved. Next DOF cell.";
+      } else {
+        mode = NONE;
+        message = "DOF entry finished. Click SETTING FINISH.";
+      }
+    } else {
+      message = "❌ Invalid DOF.";
+    }
+
+    input = "";
+  }
+}
+
+// =====================================================
+// HELPERS
+// =====================================================
+int[] nextUnfilledMatrix(Element el, int startIndex) {
+  int total = el.LOCAL * el.LOCAL;
+
+  for (int idx = startIndex + 1; idx < total; idx++) {
+    int r = idx / el.LOCAL;
+    int c = idx % el.LOCAL;
+    if (!el.keSet[r][c]) return new int[]{r, c};
+  }
+
+  for (int idx = 0; idx <= startIndex; idx++) {
+    int r = idx / el.LOCAL;
+    int c = idx % el.LOCAL;
+    if (!el.keSet[r][c]) return new int[]{r, c};
+  }
+
+  return null;
+}
+
+int[] nextUnfilledDof(Element el, int startIndex) {
+  for (int idx = startIndex + 1; idx < el.LOCAL; idx++) {
+    if (!el.dofSet[idx]) return new int[]{idx};
+  }
+
+  for (int idx = 0; idx <= startIndex; idx++) {
+    if (!el.dofSet[idx]) return new int[]{idx};
+  }
+
+  return null;
+}
+
+int stageMode(int stage) {
+  if (stage == STAGE_SIZE) return SIZE;
+  if (stage == STAGE_MATRIX) return MATRIX;
+  if (stage == STAGE_DOF) return DOF;
+  return NONE;
+}
