@@ -1,0 +1,672 @@
+// =====================================================
+// FEM GST VISUALIZER
+// CLEAN, SPACED, FULLY WORKING INPUT FLOW
+// GLOBAL = 6 | LOCAL = n x n | DOF MAPPING ENABLED
+// =====================================================
+
+final int E = 10;
+final int GLOBAL = 6;
+
+// input modes
+final int MODE_NONE   = 0;
+final int MODE_SIZE   = 1;
+final int MODE_MATRIX = 2;
+final int MODE_DOF    = 3;
+
+float cell = 50;
+
+// layout
+float matrixX = 40;
+float matrixY = 120;
+float dofGap = 35;
+
+float globalX;
+float globalY = 120;
+
+float keypadX;
+float keypadY;
+
+String status = "Select an element, then SIZE → MATRIX → DOF → ASSEMBLE.";
+String input = "";
+int mode = MODE_NONE;
+
+int active = 0;
+int rSel = -1;
+int cSel = -1;
+int dSel = -1;
+
+// keypad
+String[] keys = {
+  "7", "8", "9",
+  "4", "5", "6",
+  "1", "2", "3",
+  "0", ".", "-",
+  "BS", "CLR", "OK"
+};
+
+// =====================================================
+// GLOBAL MATRIX
+// =====================================================
+class GlobalMatrix {
+  float[][] K = new float[GLOBAL][GLOBAL];
+
+  void reset() {
+    for (int i = 0; i < GLOBAL; i++) {
+      for (int j = 0; j < GLOBAL; j++) {
+        K[i][j] = 0;
+      }
+    }
+  }
+
+  void add(int i, int j, float v) {
+    if (i >= 0 && i < GLOBAL && j >= 0 && j < GLOBAL) {
+      K[i][j] += v;
+    }
+  }
+
+  void draw() {
+    fill(0);
+    text("GLOBAL MATRIX", globalX + 150, globalY - 35);
+
+    for (int r = 0; r < GLOBAL; r++) {
+      for (int c = 0; c < GLOBAL; c++) {
+        fill(235);
+        stroke(0);
+        rect(globalX + c * cell, globalY + r * cell, cell, cell);
+
+        fill(0);
+        text(nf(K[r][c], 0, 2),
+             globalX + c * cell + cell / 2,
+             globalY + r * cell + cell / 2);
+      }
+    }
+  }
+}
+
+// =====================================================
+// ELEMENT
+// =====================================================
+class Element {
+  int n = 0;
+
+  float[][] ke;
+  boolean[][] set;
+
+  int[] C;
+  boolean[] dofSet;
+
+  void init(int size) {
+    n = size;
+
+    ke = new float[n][n];
+    set = new boolean[n][n];
+
+    C = new int[n];
+    dofSet = new boolean[n];
+
+    for (int i = 0; i < n; i++) {
+      C[i] = -1;
+      dofSet[i] = false;
+      for (int j = 0; j < n; j++) {
+        set[i][j] = false;
+        ke[i][j] = 0;
+      }
+    }
+  }
+
+  boolean matrixDone() {
+    if (n <= 0) return false;
+    for (int i = 0; i < n; i++) {
+      for (int j = 0; j < n; j++) {
+        if (!set[i][j]) return false;
+      }
+    }
+    return true;
+  }
+
+  boolean dofDone() {
+    if (n <= 0) return false;
+
+    for (int i = 0; i < n; i++) {
+      if (!dofSet[i]) return false;
+    }
+
+    for (int i = 0; i < n; i++) {
+      if (C[i] < 0 || C[i] >= GLOBAL) return false;
+    }
+
+    for (int i = 0; i < n; i++) {
+      for (int j = i + 1; j < n; j++) {
+        if (C[i] == C[j]) return false;
+      }
+    }
+
+    return true;
+  }
+
+  boolean ready() {
+    return matrixDone() && dofDone();
+  }
+
+  void assemble(GlobalMatrix G) {
+    if (!ready()) return;
+
+    for (int i = 0; i < n; i++) {
+      for (int j = 0; j < n; j++) {
+        G.add(C[i], C[j], ke[i][j]);
+      }
+    }
+  }
+
+  int[] nextUnfilledMatrix() {
+    if (n <= 0) return null;
+
+    for (int idx = 0; idx < n * n; idx++) {
+      int r = idx / n;
+      int c = idx % n;
+      if (!set[r][c]) return new int[] { r, c };
+    }
+    return null;
+  }
+
+  int nextUnfilledDofIndex() {
+    if (n <= 0) return -1;
+
+    for (int i = 0; i < n; i++) {
+      if (!dofSet[i]) return i;
+    }
+    return -1;
+  }
+}
+
+// =====================================================
+// MAIN
+// =====================================================
+Element[] elements = new Element[E];
+GlobalMatrix G;
+
+// =====================================================
+void setup() {
+  fullScreen();
+  textAlign(CENTER, CENTER);
+  textSize(18);
+
+  G = new GlobalMatrix();
+
+  for (int i = 0; i < E; i++) {
+    elements[i] = new Element();
+  }
+
+  globalX = width - 420;
+  keypadX = width / 2 - 120;
+  keypadY = height - 290;
+}
+
+// =====================================================
+void draw() {
+  background(250);
+
+  Element el = elements[active];
+
+  drawSelector();
+
+  // layout for current element
+  float dy = matrixY + max(el.n, 1) * cell + dofGap;
+
+  // local matrix
+  drawLocalMatrix(el);
+
+  // dof row
+  drawDOFRow(el, dy);
+
+  // global matrix
+  G.draw();
+
+  // keypad + input
+  drawInputPanel();
+  drawKeypad();
+
+  drawButtons();
+
+  fill(0);
+  text(status, width / 2, height - 20);
+}
+
+// =====================================================
+void drawSelector() {
+  for (int i = 0; i < E; i++) {
+    boolean on = (i == active);
+
+    if (on) fill(180, 220, 255);
+    else fill(220);
+
+    stroke(0);
+    rect(40 + i * 100, 30, 80, 40);
+
+    fill(0);
+    text("E" + (i + 1), 40 + i * 100 + 40, 50);
+  }
+}
+
+// =====================================================
+void drawLocalMatrix(Element el) {
+  fill(0);
+  text("LOCAL MATRIX", matrixX + 150, matrixY - 35);
+
+  if (el.n <= 0) {
+    fill(0);
+    text("Click SIZE and enter n", matrixX + 150, matrixY + 50);
+    return;
+  }
+
+  for (int r = 0; r < el.n; r++) {
+    for (int c = 0; c < el.n; c++) {
+      boolean sel = (mode == MODE_MATRIX && r == rSel && c == cSel);
+
+      if (sel) fill(color(255, 220, 150));
+      else if (el.set[r][c]) fill(235);
+      else fill(255);
+
+      stroke(0);
+      rect(matrixX + c * cell, matrixY + r * cell, cell, cell);
+
+      fill(0);
+      String txt = el.set[r][c] ? nf(el.ke[r][c], 0, 2) : "";
+      if (sel) txt = input;
+
+      text(txt,
+           matrixX + c * cell + cell / 2,
+           matrixY + r * cell + cell / 2);
+    }
+  }
+}
+
+// =====================================================
+void drawDOFRow(Element el, float dy) {
+  fill(0);
+  text("DOF MAPPING", matrixX + 150, dy - 20);
+
+  if (el.n <= 0) return;
+
+  for (int i = 0; i < el.n; i++) {
+    boolean sel = (mode == MODE_DOF && i == dSel);
+
+    if (sel) fill(color(255, 220, 150));
+    else if (el.dofSet[i]) fill(235);
+    else fill(255);
+
+    stroke(0);
+    rect(matrixX + i * cell, dy, cell, cell);
+
+    fill(0);
+    String txt = el.dofSet[i] ? str(el.C[i] + 1) : "";
+    if (sel) txt = input;
+
+    text(txt,
+         matrixX + i * cell + cell / 2,
+         dy + cell / 2);
+  }
+}
+
+// =====================================================
+void drawButtons() {
+  drawBtn(40,  height - 150, 120, 50, "SIZE",     color(255, 220, 120));
+  drawBtn(180, height - 150, 150, 50, "ASSEMBLE",  color(180, 255, 180));
+  drawBtn(350, height - 150, 150, 50, "RESET",     color(255, 180, 180));
+}
+
+void drawBtn(float x, float y, float w, float h, String t, color col) {
+  fill(col);
+  stroke(0);
+  rect(x, y, w, h, 10);
+
+  fill(0);
+  text(t, x + w / 2, y + h / 2);
+}
+
+// =====================================================
+void drawInputPanel() {
+  float x = keypadX - 40;
+  float y = keypadY - 70;
+  float w = 320;
+  float h = 45;
+
+  fill(255);
+  stroke(0);
+  rect(x, y, w, h, 8);
+
+  fill(0);
+  String label = "INPUT";
+  if (mode == MODE_SIZE) label = "SIZE";
+  else if (mode == MODE_MATRIX) label = "MATRIX VALUE";
+  else if (mode == MODE_DOF) label = "DOF VALUE";
+
+  String txt = input.length() > 0 ? input : ("Enter " + label);
+  text(txt, x + w / 2, y + h / 2);
+}
+
+// =====================================================
+void drawKeypad() {
+  float x = keypadX;
+  float y = keypadY;
+
+  int idx = 0;
+  for (int r = 0; r < 5; r++) {
+    for (int c = 0; c < 3; c++) {
+      if (idx >= keys.length) continue;
+
+      fill(220);
+      stroke(0);
+      rect(x + c * 80, y + r * 55, 70, 45, 6);
+
+      fill(0);
+      text(keys[idx], x + c * 80 + 35, y + r * 55 + 22);
+
+      idx++;
+    }
+  }
+}
+
+// =====================================================
+void mousePressed() {
+  // keypad first, so it never gets blocked by other hit tests
+  if (handleKeypadClick()) return;
+
+  // element selector
+  for (int i = 0; i < E; i++) {
+    if (over(40 + i * 100, 30, 80, 40)) {
+      active = i;
+      input = "";
+      mode = MODE_NONE;
+      status = "Element " + (active + 1) + " selected.";
+      return;
+    }
+  }
+
+  Element el = elements[active];
+
+  // SIZE button
+  if (over(40, height - 150, 120, 50)) {
+    mode = MODE_SIZE;
+    input = "";
+    status = "Enter element size (1 to 6), then press OK.";
+    return;
+  }
+
+  // ASSEMBLE
+  if (over(180, height - 150, 150, 50)) {
+    for (Element e : elements) {
+      if (e.n > 0 && !e.ready()) {
+        status = "Complete all matrix values and DOF mappings first.";
+        return;
+      }
+    }
+
+    G.reset();
+    for (Element e : elements) {
+      e.assemble(G);
+    }
+
+    status = "Assembly complete.";
+    mode = MODE_NONE;
+    input = "";
+    return;
+  }
+
+  // RESET
+  if (over(350, height - 150, 150, 50)) {
+    G.reset();
+    for (int i = 0; i < E; i++) {
+      elements[i] = new Element();
+    }
+    active = 0;
+    input = "";
+    mode = MODE_NONE;
+    rSel = cSel = dSel = -1;
+    status = "Reset complete.";
+    return;
+  }
+
+  // matrix click
+  if (el.n > 0) {
+    for (int r = 0; r < el.n; r++) {
+      for (int c = 0; c < el.n; c++) {
+        if (over(matrixX + c * cell, matrixY + r * cell, cell, cell)) {
+          mode = MODE_MATRIX;
+          rSel = r;
+          cSel = c;
+          input = el.set[r][c] ? str(el.ke[r][c]) : "";
+          status = "Enter value for matrix cell (" + (r + 1) + "," + (c + 1) + ").";
+          return;
+        }
+      }
+    }
+
+    // dof click
+    float dy = matrixY + el.n * cell + dofGap;
+    for (int i = 0; i < el.n; i++) {
+      if (over(matrixX + i * cell, dy, cell, cell)) {
+        mode = MODE_DOF;
+        dSel = i;
+        input = el.dofSet[i] ? str(el.C[i] + 1) : "";
+        status = "Enter global DOF for slot " + (i + 1) + ".";
+        return;
+      }
+    }
+  }
+}
+
+// =====================================================
+// KEYPAD CLICK HANDLER
+// =====================================================
+boolean handleKeypadClick() {
+  float x = keypadX;
+  float y = keypadY;
+
+  int idx = 0;
+  for (int r = 0; r < 5; r++) {
+    for (int c = 0; c < 3; c++) {
+      if (idx >= keys.length) continue;
+
+      if (over(x + c * 80, y + r * 55, 70, 45)) {
+        String k = keys[idx];
+        processKey(k);
+        return true;
+      }
+      idx++;
+    }
+  }
+  return false;
+}
+
+// =====================================================
+// PROCESS ONE KEY
+// =====================================================
+void processKey(String k) {
+  Element el = elements[active];
+
+  if (k.equals("BS")) {
+    if (input.length() > 0) {
+      input = input.substring(0, input.length() - 1);
+    }
+    return;
+  }
+
+  if (k.equals("CLR")) {
+    input = "";
+    return;
+  }
+
+  if (k.equals("OK")) {
+    commitInput(el);
+    return;
+  }
+
+  // normal typing
+  if (mode == MODE_NONE) {
+    status = "Choose SIZE, or click a matrix cell / DOF slot first.";
+    return;
+  }
+
+  if (mode == MODE_SIZE) {
+    if (isAllowedSizeChar(k)) input += k;
+    return;
+  }
+
+  if (mode == MODE_MATRIX) {
+    if (isAllowedMatrixChar(k)) input += k;
+    return;
+  }
+
+  if (mode == MODE_DOF) {
+    if (isAllowedDofChar(k)) input += k;
+    return;
+  }
+}
+
+// =====================================================
+// COMMIT INPUT
+// =====================================================
+void commitInput(Element el) {
+  if (mode == MODE_SIZE) {
+    if (input.length() == 0) {
+      status = "Enter a size first.";
+      return;
+    }
+
+    int n = int(input);
+    if (n < 1 || n > GLOBAL) {
+      status = "Invalid size. Use 1 to " + GLOBAL + ".";
+      input = "";
+      return;
+    }
+
+    el.init(n);
+    input = "";
+    mode = MODE_MATRIX;
+    int[] next = el.nextUnfilledMatrix();
+
+    if (next != null) {
+      rSel = next[0];
+      cSel = next[1];
+      status = "Size set. Enter matrix values.";
+    } else {
+      status = "Size set.";
+    }
+    return;
+  }
+
+  if (mode == MODE_MATRIX) {
+    if (el.n <= 0) {
+      status = "Set size first.";
+      return;
+    }
+
+    if (rSel < 0 || cSel < 0) {
+      status = "Select a matrix cell first.";
+      return;
+    }
+
+    if (input.length() == 0 || input.equals("-") || input.equals(".")) {
+      status = "Enter a valid matrix value.";
+      return;
+    }
+
+    el.ke[rSel][cSel] = float(input);
+    el.set[rSel][cSel] = true;
+
+    input = "";
+
+    int[] next = el.nextUnfilledMatrix();
+    if (next != null) {
+      rSel = next[0];
+      cSel = next[1];
+      status = "Matrix value saved. Next cell selected.";
+      mode = MODE_MATRIX;
+    } else {
+      int d = el.nextUnfilledDofIndex();
+      if (d >= 0) {
+        dSel = d;
+        mode = MODE_DOF;
+        status = "Matrix complete. Now enter DOF mapping.";
+      } else {
+        mode = MODE_NONE;
+        status = "Element is ready for assembly.";
+      }
+    }
+    return;
+  }
+
+  if (mode == MODE_DOF) {
+    if (el.n <= 0) {
+      status = "Set size first.";
+      return;
+    }
+
+    if (dSel < 0) {
+      status = "Select a DOF slot first.";
+      return;
+    }
+
+    if (input.length() == 0) {
+      status = "Enter a DOF number.";
+      return;
+    }
+
+    int v = int(input) - 1;  // user enters 1..6, store 0..5
+    if (v < 0 || v >= GLOBAL) {
+      status = "Invalid DOF. Use 1 to " + GLOBAL + ".";
+      input = "";
+      return;
+    }
+
+    // uniqueness check
+    for (int i = 0; i < el.n; i++) {
+      if (el.dofSet[i] && i != dSel && el.C[i] == v) {
+        status = "Duplicate DOF not allowed.";
+        input = "";
+        return;
+      }
+    }
+
+    el.C[dSel] = v;
+    el.dofSet[dSel] = true;
+    input = "";
+
+    int nextD = el.nextUnfilledDofIndex();
+    if (nextD >= 0) {
+      dSel = nextD;
+      status = "DOF saved. Next DOF slot selected.";
+      mode = MODE_DOF;
+    } else {
+      mode = MODE_NONE;
+      status = "DOF mapping complete. Element is ready.";
+    }
+    return;
+  }
+}
+
+// =====================================================
+// INPUT FILTERS
+// =====================================================
+boolean isAllowedSizeChar(String k) {
+  return k.equals("0") || k.equals("1") || k.equals("2") || k.equals("3") ||
+         k.equals("4") || k.equals("5") || k.equals("6") || k.equals("7") ||
+         k.equals("8") || k.equals("9");
+}
+
+boolean isAllowedDofChar(String k) {
+  return isAllowedSizeChar(k);
+}
+
+boolean isAllowedMatrixChar(String k) {
+  return isAllowedSizeChar(k) || k.equals(".") || k.equals("-");
+}
+
+// =====================================================
+// HELPERS
+// =====================================================
+boolean over(float x, float y, float w, float h) {
+  return mouseX > x && mouseX < x + w &&
+         mouseY > y && mouseY < y + h;
+}
