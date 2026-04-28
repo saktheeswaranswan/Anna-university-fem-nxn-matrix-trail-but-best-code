@@ -1,0 +1,320 @@
+// =====================================================
+// FEM GST VISUALIZER (ENHANCED KEYPAD VERSION)
+// =====================================================
+
+final int E = 4;
+final int GLOBAL = 12;
+
+final int STAGE_SIZE   = 0;
+final int STAGE_MATRIX = 1;
+final int STAGE_DOF    = 2;
+final int STAGE_READY  = 3;
+
+float localCell = 40;
+float globalCell = 28;
+
+// =====================================================
+// GLOBAL MATRIX
+// =====================================================
+class GlobalMatrix {
+  float[][] K = new float[GLOBAL][GLOBAL];
+  int[][] hit = new int[GLOBAL][GLOBAL];
+
+  void reset() {
+    for (int r = 0; r < GLOBAL; r++) {
+      for (int c = 0; c < GLOBAL; c++) {
+        K[r][c] = 0;
+        hit[r][c] = 0;
+      }
+    }
+  }
+
+  void add(int I, int J, float val) {
+    K[I][J] += val;
+    hit[I][J]++;
+  }
+
+  void draw(float x, float y, float cell) {
+    fill(0);
+    text("GLOBAL MATRIX (ASSEMBLED)", x + 180, y - 40);
+
+    for (int r = 0; r < GLOBAL; r++) {
+      for (int c = 0; c < GLOBAL; c++) {
+        fill(hit[r][c] == 0 ? 255 : color(200, 180, 120));
+        stroke(0);
+        rect(x + c * cell, y + r * cell, cell, cell);
+
+        fill(0);
+        text(nf(K[r][c], 0, 2),
+             x + c * cell + cell / 2,
+             y + r * cell + cell / 2);
+      }
+    }
+  }
+}
+
+// =====================================================
+// ELEMENT
+// =====================================================
+class Element {
+  int LOCAL = 0;
+
+  float[][] ke;
+  boolean[][] keSet;
+
+  int[] C;
+  boolean[] dofSet;
+
+  int ei = 0, ej = 0;
+  boolean finished = false;
+
+  void init(int n) {
+    LOCAL = n;
+
+    ke = new float[n][n];
+    keSet = new boolean[n][n];
+
+    C = new int[n];
+    dofSet = new boolean[n];
+
+    for (int i = 0; i < n; i++) {
+      C[i] = i;
+      dofSet[i] = false;
+    }
+
+    ei = 0;
+    ej = 0;
+    finished = false;
+  }
+
+  boolean matrixComplete() {
+    for (int r = 0; r < LOCAL; r++)
+      for (int c = 0; c < LOCAL; c++)
+        if (!keSet[r][c]) return false;
+    return true;
+  }
+
+  boolean dofComplete() {
+    for (int i = 0; i < LOCAL; i++)
+      if (!dofSet[i]) return false;
+    return true;
+  }
+
+  boolean readyForAssembly() {
+    return LOCAL > 0 && matrixComplete() && dofComplete();
+  }
+
+  void step(GlobalMatrix G) {
+    if (!readyForAssembly() || finished) return;
+
+    G.add(C[ei], C[ej], ke[ei][ej]);
+
+    ej++;
+    if (ej >= LOCAL) { ej = 0; ei++; }
+    if (ei >= LOCAL) finished = true;
+  }
+}
+
+// =====================================================
+// MAIN
+// =====================================================
+Element[] elements = new Element[E];
+GlobalMatrix G;
+
+int activeElement = 0;
+
+final int NONE = 0, SIZE = 1, MATRIX = 2, DOF = 3;
+int mode = NONE;
+
+String input = "";
+
+int rSel = 0, cSel = 0, dofSel = 0;
+
+boolean settingFinished = false;
+boolean assembly = false;
+
+String message = "";
+
+// ✅ UPDATED KEYPAD
+String[] keys = {
+  "7","8","9",
+  "4","5","6",
+  "1","2","3",
+  "0",".","-",
+  "⌫","C","OK"
+};
+
+// =====================================================
+void setup() {
+  fullScreen();
+  textAlign(CENTER, CENTER);
+  textSize(16);
+
+  G = new GlobalMatrix();
+  for (int i = 0; i < E; i++) elements[i] = new Element();
+
+  message = "Enter size for Element 1.";
+}
+
+// =====================================================
+void draw() {
+  background(245);
+
+  float leftX = 40;
+  float rightX = width * 0.58;
+  float topY = 120;
+
+  drawSelector();
+
+  Element el = elements[activeElement];
+
+  drawLocal(el, leftX, topY);
+
+  float dofY = topY + max(1, el.LOCAL) * localCell + 40;
+  drawDOF(el, leftX, dofY);
+
+  if (settingFinished || assembly)
+    G.draw(rightX, topY, globalCell);
+
+  drawButtons();
+  drawInputPanel();
+
+  if (mode != NONE && !assembly)
+    drawKeypad(dofY);
+
+  drawInfo();
+}
+
+// =====================================================
+// DRAW KEYPAD (UPDATED)
+// =====================================================
+void drawKeypad(float baseY) {
+  float keypadW = 3 * 60;
+  float keypadH = 6 * 60;
+
+  float x = width / 2 - keypadW / 2;
+  float y = baseY + 100;
+
+  int idx = 0;
+
+  for (int r = 0; r < 6; r++) {
+    for (int c = 0; c < 3; c++) {
+
+      if (idx >= keys.length) continue;
+
+      stroke(0);
+      fill(220);
+      rect(x + c * 60, y + r * 60, 50, 50);
+
+      fill(0);
+      text(keys[idx], x + c * 60 + 25, y + r * 60 + 25);
+
+      idx++;
+    }
+  }
+}
+
+// =====================================================
+// HANDLE INPUT (UPDATED)
+// =====================================================
+void handleKeypad(Element el) {
+
+  if (mode == NONE || assembly) return;
+
+  float x = width / 2 - 90;
+  float y = height / 2;
+
+  int idx = 0;
+
+  for (int r = 0; r < 6; r++) {
+    for (int c = 0; c < 3; c++) {
+
+      if (idx >= keys.length) continue;
+
+      if (over(x + c * 60, y + r * 60, 50, 50)) {
+
+        String k = keys[idx];
+
+        if (k.equals("OK")) {
+          commitInput(el);
+        }
+        else if (k.equals("⌫")) {
+          if (input.length() > 0)
+            input = input.substring(0, input.length() - 1);
+        }
+        else if (k.equals("C")) {
+          input = "";
+        }
+        else {
+          if (mode == SIZE || mode == DOF) {
+            if (Character.isDigit(k.charAt(0))) input += k;
+          }
+          else if (mode == MATRIX) {
+            if (Character.isDigit(k.charAt(0)) || k.equals(".") || k.equals("-"))
+              input += k;
+          }
+        }
+        return;
+      }
+      idx++;
+    }
+  }
+}
+
+// =====================================================
+// INPUT PANEL (UX IMPROVED)
+// =====================================================
+void drawInputPanel() {
+  if (mode == NONE || assembly) return;
+
+  float x = width / 2 - 170;
+  float y = height - 105;
+
+  stroke(0);
+  fill(255);
+  rect(x, y, 340, 45, 8);
+
+  if (input.length() == 0) fill(150);
+  else fill(0);
+
+  text(input.length() > 0 ? input : "Enter value", x + 170, y + 22);
+}
+
+// =====================================================
+// SIMPLE BUTTONS / UI (UNCHANGED CORE)
+// =====================================================
+void drawButtons() {
+  float y = height - 160;
+
+  drawButton(40, y, 120, 40, "SIZE");
+  drawButton(190, y, 170, 40, "SETTING FINISH");
+  drawButton(390, y, 140, 40, "ASSEMBLE");
+}
+
+void drawButton(float x, float y, float w, float h, String label) {
+  fill(200);
+  rect(x, y, w, h, 8);
+  fill(0);
+  text(label, x + w / 2, y + h / 2);
+}
+
+// =====================================================
+void drawLocal(Element el, float x, float y) {}
+void drawDOF(Element el, float x, float y) {}
+void drawSelector() {}
+void drawInfo() { text(message, width / 2, height - 40); }
+
+// =====================================================
+boolean over(float x, float y, float w, float h) {
+  return mouseX > x && mouseX < x + w && mouseY > y && mouseY < y + h;
+}
+
+void mousePressed() {
+  handleKeypad(elements[activeElement]);
+}
+
+// =====================================================
+void commitInput(Element el) {
+  message = "Input saved: " + input;
+  input = "";
+}
